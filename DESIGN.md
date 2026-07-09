@@ -140,3 +140,40 @@ MoE**를 전제로 한다:
 - 익스퍼트 활성 분포가 균등하면 캐시 적중률이 낮아져 대역폭 병목으로 회귀 —
   학습 시 라우팅 지역성(locality)을 유도하는 보조 손실 필요.
 - 기기별 UFS 세대 차이(UFS 3.1은 ~2GB/s)로 성능 편차가 큼 — 최소 사양 정의 필요.
+
+## 8. 온디바이스 가속 — NPU 매핑 (S25+ / Snapdragon 8 Elite Hexagon)
+
+### 8.1 NPU와 각 변형의 적합성
+
+Hexagon NPU(HTP)는 **상주 모델 + 고정 shape + INT8/INT4**에 최적화된 장치다.
+사전 컴파일된 context binary와 소용량 TCM 타일링을 전제로 하므로, 우리 설계와
+다음처럼 갈린다:
+
+| 요소 | NPU 적합성 | 비고 |
+|---|---|---|
+| 변형 A (500MB 상주 코어/draft) | **적합** | INT4로 변환해 상주 실행, 저전력 |
+| 변형 B (9GB 스트리밍 MoE) | 부적합 | 토큰별 가중치 스왑을 HTP가 싫어함 → CPU/GPU + mmap |
+| 1.58bit 삼진 | 네이티브 미지원 | INT4/INT8로 디퀀트 실행. BitNet 이점은 디스크·RAM에만 잔존 |
+| MoE 동적 라우팅 | 부분 부적합 | 제어 흐름은 CPU/GPU 폴백 잦음 |
+
+**결론**: 계층이 하드웨어로 자연스럽게 분리된다 — **draft/상주 코어는 NPU(INT4),
+대형 MoE 검증자는 CPU/GPU 스트리밍.** NPU는 "모델이 다 들어갈 때" 쓰는 장치이지
+"안 들어가서 스왑할 때" 쓰는 장치가 아니다.
+
+### 8.2 정식 배포 경로 (프로프라이어터리 .so 추출 금지)
+
+- Google AI Edge Gallery APK에서 `libQnnHtp*.so` / HTP skel(`libQnnHtpV79Skel.so`
+  등)을 추출해 재사용하지 않는다: (a) Qualcomm QNN SDK 라이선스 소지, (b) skel은
+  DSP 아키텍처 버전에 묶여 이식성 없음, (c) Gallery의 `.task`/`.litertlm` 포맷은
+  우리 삼진 가중치와 무관.
+- 정식 경로: **Qualcomm QNN SDK / AI Hub**에서 델리게이트 확보 →
+  **LiteRT(TFLite) QNN delegate** 또는 **MediaPipe LLM Inference API** 사용.
+- 우리 모델 온디바이스화 파이프라인: `우리 체크포인트 → LiteRT 변환 →
+  INT4 양자화 → QNN delegate 컴파일(context binary) → NPU 실행`. 남의 .so가
+  아니라 우리 모델을 이 파이프라인에 태워야 한다.
+
+### 8.3 리스크
+
+- Hexagon LLM 지원은 특정 변환 모델에 한정적 — 커스텀 아키텍처(반복 블록,
+  가변 깊이)는 델리게이트 미지원 op가 나올 수 있어 부분 CPU 폴백 대비 필요.
+- context binary는 shape 고정 — 가변 컨텍스트/KV 캐시 처리에 별도 설계 필요.
