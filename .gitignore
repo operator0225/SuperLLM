@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+distill/out/
+distill/data/teacher_data.jsonl
+*.gguf
+.venv/
+venv/
