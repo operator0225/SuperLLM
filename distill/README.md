@@ -21,8 +21,22 @@ bf16 base  ──(distill 학습)──▶  bf16 checkpoint  ──(convert_hf_t
 - 따라서 **black-box / sequence-level KD**: 교사가 만든 고품질 응답·CoT를 데이터로
   삼아 학생을 SFT한다. (선택) top-20 logprobs는 보조 신호로 저장만 해 둔다.
 
-### 3) LFM2.5에 230M은 없다
-최소 크기는 **350M**. (`LiquidAI/LFM2.5-350M`)
+### 3) 교사를 오픈 웨이트로 바꿀 때: 토크나이저 불일치 → ULD
+Gemini 대신 **Gemma 4 E2B/E4B**(오픈 웨이트)를 교사로 쓰면 전체 로짓에 접근할 수
+있다. 하지만 vocab이 다르다:
+
+| | vocab | 토크나이저 |
+|---|---|---|
+| Gemma 4 (E2B/E4B) | 262,144 | SentencePiece |
+| LFM2.5 (230M/350M/1.2B) | 65,536 | LFM2 자체 |
+
+고전적 full-logit KL은 **같은 vocab**을 전제로 하므로 성립하지 않는다. cross-tokenizer
+증류 — **ULD(Universal Logit Distillation, Boizard et al. 2024)** 를 쓴다: 각 위치의
+확률분포를 정렬해 L1 거리를 재는 vocab-무관 손실. 위치는 offset mapping으로 같은
+문자 구간을 예측하는 토큰끼리 매칭한다. 구현: `train_distill_logit.py`.
+교사는 4-bit(NF4)로 로드 가능(메모리 절약, 증류 신호로 충분).
+
+참고: LFM2.5 최소 크기는 **230M**(`LiquidAI/LFM2.5-230M`, 2026-06). 350M/1.2B도 있음.
 
 ### 4) 라이선스
 Google Gemini API 약관은 출력물로 경쟁 모델을 학습하는 것을 제한하는 조항이 있다.
@@ -33,8 +47,13 @@ Google Gemini API 약관은 출력물로 경쟁 모델을 학습하는 것을 �
 | 단계 | 스크립트 | 입력 | 출력 |
 |---|---|---|---|
 | 1. 교사 데이터 생성 | `gen_teacher_data.py` | `data/seed_prompts.jsonl` | `data/teacher_data.jsonl` |
-| 2. 증류 학습(SFT) | `train_distill.py` | teacher_data + bf16 base | `out/…-distill/` |
+| 2a. sequence-level 증류 | `train_distill.py` | teacher_data + bf16 base | `out/…-distill/` |
+| 2b. cross-tokenizer 로짓 증류(ULD) | `train_distill_logit.py` | 대상 텍스트 + Gemma 교사(4bit) + bf16 base | `out/…-uld/` |
 | 3. GGUF 배포 변환 | `export_gguf.md` | bf16 checkpoint | `…-q4_k_m.gguf` |
+
+- **2a (기본, 안전)**: 교사 응답으로 학생 SFT. 교사가 닫힌 API(Gemini)여도 됨. 견고함.
+- **2b (강한 신호, 실험)**: Gemma 교사의 출력 분포를 ULD로 증류. 오픈 웨이트 교사 필요,
+  GPU 필요. 2a보다 강하지만 정렬 근사가 들어감 — GPU 검증 후 사용.
 
 ## 실행
 

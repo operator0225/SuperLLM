@@ -82,6 +82,10 @@ Gemma 27B는 FP16 기준 ~54GB, 4비트로도 ~16GB다. 가중치의 대부분�
 > 핵심 제약: (1) q4_k_m 은 학습 불가 → bf16 로 학습 후 배포 시 변환,
 > (2) Gemini 는 top-20 logprobs 만 노출 + 토크나이저 불일치 → 전체 logit KL 대신
 > 교사 응답 SFT.
+> 교사 경로 두 가지: (2a) 닫힌 API/오픈 교사로 sequence-level SFT(`train_distill.py`),
+> (2b) 오픈 웨이트 교사(Gemma 4 E2B/E4B, 4-bit 가능)로 cross-tokenizer 로짓 증류
+> — vocab 불일치(Gemma 262k vs LFM2 65k) 때문에 정석 KL 대신 ULD 손실 사용
+> (`train_distill_logit.py`).
 
 ## 6. 리스크 (변형 A)
 
