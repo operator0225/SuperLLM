@@ -103,20 +103,27 @@ def main() -> int:
     student.config.use_cache = False
     student.train()
 
-    # --- 교사 (Gemma, 4-bit 선택 가능, freeze) ---
+    # --- 교사 (Gemma, freeze) ---
+    # 교사는 forward만 하므로 양자화는 학습성이 아니라 '로짓 충실도'에만 영향.
+    # teacher_precision: nf4(저VRAM) | int8(중간) | bf16(최상 충실도). E4B는 작아 여유 있으면 상향.
     t_tok = AutoTokenizer.from_pretrained(lc["teacher_model"])
-    t_kwargs = {"torch_dtype": torch.bfloat16}
-    if lc.get("load_in_4bit"):
+    prec = lc.get("teacher_precision", "nf4" if lc.get("load_in_4bit") else "bf16")
+    t_kwargs = {"torch_dtype": torch.bfloat16, "device_map": {"": 0}}
+    if prec == "nf4":
         from transformers import BitsAndBytesConfig
         t_kwargs["quantization_config"] = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16,
+            load_in_4bit=True, bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True,
         )
-        t_kwargs["device_map"] = {"": 0}
+    elif prec == "int8":
+        from transformers import BitsAndBytesConfig
+        t_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
+    elif prec == "bf16":
+        pass  # 전체 bf16 — 로짓 충실도 최상
     else:
-        t_kwargs["device_map"] = {"": device}
+        raise ValueError(f"unknown teacher_precision: {prec!r} (nf4|int8|bf16)")
     teacher = AutoModelForCausalLM.from_pretrained(lc["teacher_model"], **t_kwargs)
+    print(f"[info] teacher precision = {prec}")
     teacher.eval()
     for p in teacher.parameters():
         p.requires_grad_(False)
