@@ -159,11 +159,13 @@ def main() -> int:
     for p in teacher.parameters():
         p.requires_grad_(False)
 
+    # 참고: Gemma4 등 멀티모달 config 는 최상위에 vocab_size 가 없다(text_config 중첩).
+    # ULD 는 config 를 안 쓰므로 로그는 토크나이저 길이로 표기한다.
     if s_tok.get_vocab() == t_tok.get_vocab():
         print("[info] 토크나이저가 동일 — 정석 full-KL도 가능하지만 여기선 ULD로 진행.")
     else:
-        print(f"[info] cross-tokenizer: student vocab={student.config.vocab_size}, "
-              f"teacher vocab={teacher.config.vocab_size} → ULD 사용.")
+        print(f"[info] cross-tokenizer: student vocab≈{len(s_tok)}, "
+              f"teacher vocab≈{len(t_tok)} → ULD 사용.")
 
     texts = [
         json.loads(l)["prompt"] + "\n" + json.loads(l)["response"]
