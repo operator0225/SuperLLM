@@ -86,7 +86,19 @@ PyTorch+GPU 가 필요하고, (b) GPU 가 있으면 NF4 교사가 더 간단하�
 - **2b (강한 신호, 실험)**: Gemma 교사의 출력 분포를 ULD로 증류. 오픈 웨이트 교사 필요,
   GPU 필요. 2a보다 강하지만 정렬 근사가 들어감 — GPU 검증 후 사용.
 
-## 실행
+## Colab 무료 GPU로 실행 (GPU 소유 불필요, 세션 분할 가능)
+
+`distill_colab.ipynb` 를 Colab에 열고 위→아래로 실행. 무료 T4는 세션이 끊기므로
+(유휴 ~90분, 일일 GPU 쿼터) **체크포인트를 Google Drive에 저장하고 나눠서 실행**한다.
+
+- 학습(2b)은 `save_steps` 마다 `output_dir`(Drive 경로)에 어댑터+옵티마이저+진행상태 저장.
+- 세션이 끊기면 노트북 Step 1~3 재실행 후 **학습 셀만 다시 실행** → `trainer_state.json`
+  을 읽어 마지막 지점부터 자동 재개(`[resume] ... 부터 재개` 로그).
+- 1단계 데이터 생성(`gen_teacher_data.py`)도 이미 done 프롬프트를 건너뛰어 이어하기 지원.
+
+즉 **여러 세션에 걸쳐 학습해도 이어진다.** 완료 후 ~200MB(또는 LoRA 어댑터)만 S25+로.
+
+## 실행 (로컬/직접)
 
 ```bash
 pip install -r requirements.txt

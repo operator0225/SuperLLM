@@ -59,6 +59,7 @@ distill_logit:
   grad_accum: 16                # micro-batch=1(정렬이 예제별) → 누적으로 유효 배치 확보
   max_seq_len: 2048
   logging_steps: 10
+  save_steps: 200               # 이 스텝마다 output_dir에 체크포인트 저장(=Colab 이어하기 단위)
 
 export:
   gguf_out: "distill/out/lfm2.5-350m-distill-q4_k_m.gguf"
