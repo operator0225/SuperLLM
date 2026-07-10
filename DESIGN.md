@@ -151,7 +151,12 @@ MoE**를 전제로 한다:
   학습 시 라우팅 지역성(locality)을 유도하는 보조 손실 필요.
 - 기기별 UFS 세대 차이(UFS 3.1은 ~2GB/s)로 성능 편차가 큼 — 최소 사양 정의 필요.
 
-## 8. 온디바이스 가속 — NPU 매핑 (S25+ / Snapdragon 8 Elite Hexagon)
+## 8. 온디바이스 가속 — GPU/NPU 매핑 (S25+ / Snapdragon)
+
+> 정정(§10 참조): 실제 모바일 LLM 추론의 기본 가속 경로는 **GPU(Adreno, OpenCL/
+> Vulkan)** 다. MediaPipe/LiteRT-LM 은 NPU 직접 선택을 지원하지 않는다(NPU 는 AICore/
+> QNN 별도 경로). 아래 NPU 논의는 "QNN 을 별도로 태우는 고급 경로"로 읽고, 기본 배포는
+> GPU 백엔드로 상정하라.
 
 ### 8.1 NPU와 각 변형의 적합성
 
@@ -225,23 +230,29 @@ Gemma 4(vocab 262,144)를 교사로 로짓 증류할 때 학생 LFM2.5(vocab 65,
 ULD로 로짓 신호를 얻고, 그래도 부족하면 이식 대신 **학생을 350M→700M/1.2B로 키우는
 쪽**이 같은 크기 예산에서 더 나은 투자다(늘어난 파라미터가 본체 지능에 쓰이므로).
 
-## 10. 온디바이스 학습(증류)이 안 되는 이유 — NPU엔 backward가 없다
+## 10. 온디바이스 학습(증류)이 안 되는 이유 — 정정판
 
-폰에서 교사가 빠른 것은 '추론'이고, 증류는 '학습(backward)'이다. LiteRT/TF 를 개조해
-폰에서 학습하려는 시도는 하드웨어와 정면으로 싸운다:
+정정: 폰에서 Gemma E4B 는 **NPU 가 아니라 GPU(Adreno, OpenCL/Vulkan)** 로 돈다.
+MediaPipe/LiteRT-LM 의 Android 가속 경로는 GPU(OpenCL)이고, NPU 직접 선택은 지원되지
+않는다(진짜 NPU 가속은 AICore/QNN 별도 경로). 따라서 §8 의 "NPU 배포" 프레이밍도
+"모바일 GPU(OpenCL/Vulkan) 배포"로 읽어야 한다.
 
-- **NPU(Hexagon/QNN)는 backward pass 가 없다.** 추론 전용 고정함수 가속기다. E4B 를
-  폰에서 빠르게 만드는 그 NPU 가 gradient 연산엔 무용지물 → backward 는 CPU 폴백.
-- **메모리**: 학습은 가중치 + gradient + optimizer state(Adam≈2×) + backprop activation
-  이 필요. 8B 교사 forward + 262k 로짓 + 학생 backward 를 폰 RAM(12GB, OS 공유)에서
-  감당 불가.
-- **발열/전력**: 지속 학습 연산은 수 분 내 thermal throttling. 학습은 수 시간짜리다.
-- **소프트웨어**: Snapdragon 타깃 LLM급 autograd+optimizer 스택이 없다. PyTorch/
-  bitsandbytes 는 CUDA 바운드. "LiteRT 개조"는 config 가 아니라 수년짜리 연구다.
+그리고 NPU 와 달리 **GPU 는 범용 연산이라 backward(gradient)를 원리적으로 수행할 수
+있다.** 즉 "backward 가 불가능"해서 학습이 안 되는 것이 아니다. 진짜 병목은 소프트웨어다:
 
-참고: TFLite 에 on-device training 이 있긴 하다. 그러나 소형 모델의 전이학습/개인화
-(주로 CPU)용이며 8B 교사 증류로 스케일하지 않는다.
+- **모바일 GPU 용 training 프레임워크가 없다.** ExecuTorch(Vulkan/OpenCL), LiteRT GPU,
+  MediaPipe, llama.cpp Vulkan — 전부 **추론 전용**이다. autograd + 옵티마이저를 모바일
+  GPU 에서 돌리는 스택이 존재하지 않는다.
+- 그러므로 OpenCL/Vulkan 으로 폰에서 증류하려면 attention·conv(LFM2 하이브리드)·
+  layernorm·softmax·cross-entropy·Adam 의 **backward 커널을 전부 직접 구현**해야 한다.
+  이는 런타임 "개조"가 아니라 **훈련 프레임워크를 밑바닥부터 작성**하는 일이다.
+- **처리량/발열**: Adreno GPU 는 수 TFLOPS + thermal throttling + LPDDR 공유라, 클라우드
+  T4(~65 TFLOPS, ~$0.5/h)보다 20~100× 느리다. 클라우드 2시간 ≈ 폰 며칠(스로틀 포함).
+- 참고: 모바일 GPU 백엔드가 지원하는 LoRA 는 **사전학습된 어댑터의 추론 적용**(MediaPipe/
+  LiteRT, attention 한정)이지 on-device 학습이 아니다.
 
 **실제 해결책(GPU 소유 불필요)**: 증류는 1회성이다. Google Colab 무료 GPU(T4)나
-클라우드 GPU 를 몇 시간(~$1~2) 빌려 한 번 학습 → ~200MB 산출물 → 이후 영원히 폰에서만
-돈다. 1회 $1 단계를 없애려 수년짜리 런타임 개조를 하는 것은 잘못된 트레이드다.
+클라우드 GPU 를 몇 시간(~$1~2) 빌려 한 번 학습 → ~200MB(또는 LoRA 어댑터) 산출 →
+이후 폰 GPU(OpenCL/Vulkan)에서만 돈다. 폰의 LoRA 추론 적용과도 맞물린다:
+**클라우드에서 LoRA 학습 → 폰 GPU 백엔드에서 적용.** 1회 $1 단계를 없애려 훈련
+프레임워크를 새로 만드는 것은 잘못된 트레이드다.
