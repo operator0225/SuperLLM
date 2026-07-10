@@ -1,0 +1,9 @@
+# 학습(2단계)은 CUDA GPU 환경 권장. 데이터 생성(1단계)은 CPU로 충분.
+torch>=2.4.0
+transformers>=4.55.0          # LFM2 아키텍처 네이티브 지원 버전
+trl>=0.12.0                   # SFTTrainer
+datasets>=3.0.0
+accelerate>=1.0.0
+google-genai>=0.3.0           # 신규 Google GenAI SDK (from google import genai)
+pyyaml>=6.0
+tqdm>=4.66

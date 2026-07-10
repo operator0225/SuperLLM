@@ -1,0 +1,41 @@
+# 증류 파이프라인 설정
+
+teacher:
+  # 사용 가능 여부/이름은 API 콘솔에서 확인. logprobs 지원은 모델/엔드포인트별로 다름.
+  model: "gemini-2.5-flash"        # 대안: "gemini-2.5-pro" (품질↑, 비용↑)
+  temperature: 0.7
+  max_output_tokens: 2048
+  request_logprobs: true            # top-k logprobs를 함께 저장(보조 신호)
+  top_logprobs: 20                  # Gemini 상한 = 20
+  request_timeout_s: 120
+  max_retries: 5
+
+student:
+  # 반드시 학습 가능한 bf16 체크포인트. q4_k_m GGUF가 아님!
+  # LFM2.5 최소 크기는 350M (230M은 존재하지 않음). 정확한 repo id는 HF에서 확인.
+  base_model: "LiquidAI/LFM2.5-350M"
+  max_seq_len: 4096
+
+data:
+  seed_prompts: "distill/data/seed_prompts.jsonl"   # 줄당 {"prompt": "..."}
+  teacher_out:  "distill/data/teacher_data.jsonl"
+  system_prompt: "You are a helpful, concise assistant. Think step by step for hard problems."
+
+train:
+  output_dir: "distill/out/lfm2.5-350m-distill"
+  epochs: 3
+  lr: 2.0e-5
+  per_device_batch_size: 4
+  grad_accum: 8
+  warmup_ratio: 0.03
+  weight_decay: 0.0
+  bf16: true
+  gradient_checkpointing: true
+  packing: true
+  assistant_only_loss: true         # 손실은 assistant 토큰에만(프롬프트 제외)
+  logging_steps: 10
+  save_steps: 200
+
+export:
+  gguf_out: "distill/out/lfm2.5-350m-distill-q4_k_m.gguf"
+  quant: "q4_k_m"
