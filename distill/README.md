@@ -34,7 +34,16 @@ Gemini 대신 **Gemma 4 E2B/E4B**(오픈 웨이트)를 교사로 쓰면 전체 �
 증류 — **ULD(Universal Logit Distillation, Boizard et al. 2024)** 를 쓴다: 각 위치의
 확률분포를 정렬해 L1 거리를 재는 vocab-무관 손실. 위치는 offset mapping으로 같은
 문자 구간을 예측하는 토큰끼리 매칭한다. 구현: `train_distill_logit.py`.
-교사는 4-bit(NF4)로 로드 가능(메모리 절약, 증류 신호로 충분).
+
+**저VRAM 구성(권장): 교사·학생 둘 다 4-bit.**
+- 교사(Gemma 4 E4B): NF4 로드(`load_in_4bit`). 로짓 신호로 충분.
+- 학생(LFM2.5-350M): **QLoRA** — 4-bit NF4로 얼려 로드하고 LoRA 어댑터만 학습
+  (`student_load_in_4bit`). 4-bit 가중치는 직접 역전파 불가하므로 어댑터로 학습한다.
+- 둘 다 4-bit면 ~8GB급 GPU에서도 동작. 학습 후 어댑터를 병합→재양자화해 배포.
+
+**LiteRT는 교사에 쓰지 않는다.** LiteRT/MediaPipe LLM API는 온디바이스 *생성*용이라
+ULD에 필요한 위치별 262k full-logit 을 내주지 않고(기껏 top-k), GPU 학습 루프의
+교사로도 부적합하다. LiteRT의 자리는 **최종 학생 배포**(DESIGN §8 NPU 경로)다.
 
 참고: LFM2.5 최소 크기는 **230M**(`LiquidAI/LFM2.5-230M`, 2026-06). 350M/1.2B도 있음.
 

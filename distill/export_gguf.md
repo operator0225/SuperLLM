@@ -10,6 +10,20 @@ cd llama.cpp && cmake -B build && cmake --build build -j     # llama-quantize �
 pip install -r requirements.txt                              # convert 스크립트 의존성
 ```
 
+## (0) QLoRA 어댑터 병합 (2b 경로로 학습한 경우)
+`train_distill_logit.py` 를 `student_load_in_4bit: true` 로 돌렸다면 결과는 LoRA
+어댑터다. 배포 전 base(fp16)에 병합한다. (4-bit에 직접 병합 불가 → fp16 로드 후 병합.)
+```python
+import torch
+from peft import PeftModel
+from transformers import AutoModelForCausalLM, AutoTokenizer
+base = AutoModelForCausalLM.from_pretrained("LiquidAI/LFM2.5-350M", torch_dtype=torch.float16)
+merged = PeftModel.from_pretrained(base, "distill/out/lfm2.5-350m-uld").merge_and_unload()
+merged.save_pretrained("distill/out/lfm2.5-350m-uld-merged")
+AutoTokenizer.from_pretrained("distill/out/lfm2.5-350m-uld").save_pretrained("distill/out/lfm2.5-350m-uld-merged")
+```
+이후 아래 변환의 입력 경로로 `...-uld-merged` 를 사용한다.
+
 ## 변환
 ```bash
 # (1) HF 체크포인트 → f16 GGUF

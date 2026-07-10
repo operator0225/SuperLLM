@@ -56,8 +56,8 @@ def uld_loss(student_logits, teacher_logits, temperature, top_k):
     각 분포를 softmax(/T) 후 내림차순 정렬, top_k 로 truncate 하여 같은 길이로
     맞춘 뒤 L1. (top_k truncation 은 연산량을 위한 근사.)
     """
-    q = F.softmax(student_logits / temperature, dim=-1)
-    p = F.softmax(teacher_logits / temperature, dim=-1)
+    q = F.softmax(student_logits.float() / temperature, dim=-1)
+    p = F.softmax(teacher_logits.float() / temperature, dim=-1)
     k = min(top_k, q.size(-1), p.size(-1))
     q_top = torch.topk(q, k, dim=-1).values  # 이미 내림차순
     p_top = torch.topk(p, k, dim=-1).values
@@ -74,11 +74,33 @@ def main() -> int:
     lc = cfg["distill_logit"]
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # --- 학생 (bf16, 학습 대상) ---
+    # --- 학생 ---
+    # student_load_in_4bit=true 이면 QLoRA: 4-bit NF4 로 얼려 로드하고 LoRA 어댑터만 학습.
+    # (4-bit 가중치는 직접 역전파 불가 → 어댑터로 학습. 교사·학생 모두 4-bit면 저VRAM.)
     s_tok = AutoTokenizer.from_pretrained(scfg["base_model"])
-    student = AutoModelForCausalLM.from_pretrained(
-        scfg["base_model"], torch_dtype=torch.bfloat16, attn_implementation="eager",
-    ).to(device)
+    if lc.get("student_load_in_4bit"):
+        from transformers import BitsAndBytesConfig
+        from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+        s_bnb = BitsAndBytesConfig(
+            load_in_4bit=True, bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True,
+        )
+        student = AutoModelForCausalLM.from_pretrained(
+            scfg["base_model"], quantization_config=s_bnb,
+            torch_dtype=torch.bfloat16, attn_implementation="eager", device_map={"": 0},
+        )
+        student = prepare_model_for_kbit_training(student, use_gradient_checkpointing=True)
+        student = get_peft_model(student, LoraConfig(
+            r=lc.get("lora_r", 16), lora_alpha=lc.get("lora_alpha", 32),
+            lora_dropout=lc.get("lora_dropout", 0.05), bias="none",
+            task_type="CAUSAL_LM", target_modules="all-linear",  # LFM2 모듈명 자동 탐지
+        ))
+        student.print_trainable_parameters()
+    else:
+        student = AutoModelForCausalLM.from_pretrained(
+            scfg["base_model"], torch_dtype=torch.bfloat16, attn_implementation="eager",
+        ).to(device)
+    student.config.use_cache = False
     student.train()
 
     # --- 교사 (Gemma, 4-bit 선택 가능, freeze) ---
@@ -111,7 +133,8 @@ def main() -> int:
         if l.strip()
     ]
 
-    opt = torch.optim.AdamW(student.parameters(), lr=float(lc["lr"]))
+    trainable = [p for p in student.parameters() if p.requires_grad]
+    opt = torch.optim.AdamW(trainable, lr=float(lc["lr"]))
     T = lc["temperature"]
     alpha = lc["alpha_hard"]
     accum = lc["grad_accum"]
@@ -160,9 +183,10 @@ def main() -> int:
             step += 1
 
     Path(lc["output_dir"]).mkdir(parents=True, exist_ok=True)
-    student.save_pretrained(lc["output_dir"])
+    student.save_pretrained(lc["output_dir"])   # 4-bit면 LoRA 어댑터만 저장
     s_tok.save_pretrained(lc["output_dir"])
-    print(f"saved → {lc['output_dir']}")
+    print(f"saved → {lc['output_dir']} "
+          f"({'LoRA adapter' if lc.get('student_load_in_4bit') else 'full model'})")
     return 0
 
 

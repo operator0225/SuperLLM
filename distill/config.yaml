@@ -41,8 +41,14 @@ distill_logit:
   # 오픈 웨이트 교사(전체 로짓 접근 가능). 정확한 repo id는 HF에서 확인.
   teacher_model: "google/gemma-4-E4B-it"   # 대안: google/gemma-4-E2B-it
   load_in_4bit: true            # 교사를 NF4로 로드(메모리↓). 질문의 "교사 4비트" = 여기.
+                                # 참고: LiteRT는 교사에 부적합(full-logit 미노출) → 배포용(§8).
   target_data: "distill/data/teacher_data.jsonl"   # 증류 대상 텍스트(1단계 산출물 재사용)
   output_dir: "distill/out/lfm2.5-350m-uld"
+  # 학생도 4-bit로 학습(QLoRA): 4-bit NF4 로드 + LoRA 어댑터만 학습.
+  student_load_in_4bit: true
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
   alpha_hard: 0.5               # 총손실 = alpha*CE(hard) + (1-alpha)*ULD
   temperature: 2.0              # soft target 온도
   uld_top_k: 256                # ULD 정렬분포 truncation(연산량↓, 근사)
