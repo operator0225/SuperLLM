@@ -224,3 +224,24 @@ Gemma 4(vocab 262,144)를 교사로 로짓 증류할 때 학생 LFM2.5(vocab 65,
 크기가 곧 제품인 이 프로젝트에서 이식은 순이득이 아니다(본체 지능 불변 + 크기 2배).
 ULD로 로짓 신호를 얻고, 그래도 부족하면 이식 대신 **학생을 350M→700M/1.2B로 키우는
 쪽**이 같은 크기 예산에서 더 나은 투자다(늘어난 파라미터가 본체 지능에 쓰이므로).
+
+## 10. 온디바이스 학습(증류)이 안 되는 이유 — NPU엔 backward가 없다
+
+폰에서 교사가 빠른 것은 '추론'이고, 증류는 '학습(backward)'이다. LiteRT/TF 를 개조해
+폰에서 학습하려는 시도는 하드웨어와 정면으로 싸운다:
+
+- **NPU(Hexagon/QNN)는 backward pass 가 없다.** 추론 전용 고정함수 가속기다. E4B 를
+  폰에서 빠르게 만드는 그 NPU 가 gradient 연산엔 무용지물 → backward 는 CPU 폴백.
+- **메모리**: 학습은 가중치 + gradient + optimizer state(Adam≈2×) + backprop activation
+  이 필요. 8B 교사 forward + 262k 로짓 + 학생 backward 를 폰 RAM(12GB, OS 공유)에서
+  감당 불가.
+- **발열/전력**: 지속 학습 연산은 수 분 내 thermal throttling. 학습은 수 시간짜리다.
+- **소프트웨어**: Snapdragon 타깃 LLM급 autograd+optimizer 스택이 없다. PyTorch/
+  bitsandbytes 는 CUDA 바운드. "LiteRT 개조"는 config 가 아니라 수년짜리 연구다.
+
+참고: TFLite 에 on-device training 이 있긴 하다. 그러나 소형 모델의 전이학습/개인화
+(주로 CPU)용이며 8B 교사 증류로 스케일하지 않는다.
+
+**실제 해결책(GPU 소유 불필요)**: 증류는 1회성이다. Google Colab 무료 GPU(T4)나
+클라우드 GPU 를 몇 시간(~$1~2) 빌려 한 번 학습 → ~200MB 산출물 → 이후 영원히 폰에서만
+돈다. 1회 $1 단계를 없애려 수년짜리 런타임 개조를 하는 것은 잘못된 트레이드다.
