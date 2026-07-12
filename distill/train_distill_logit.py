@@ -54,17 +54,15 @@ def build_step_alignment(teacher_offsets, student_offsets):
 
 
 def uld_loss(student_logits, teacher_logits, temperature, top_k):
-    """ULD: 정렬된 확률분포 간 L1 거리. vocab 크기 무관.
+    """ULD(메모리 절약판): 정렬된 확률분포 간 L1 거리. vocab 크기 무관.
 
     student_logits: (P, V_s), teacher_logits: (P, V_t)  — P=정렬된 스텝 수.
-    각 분포를 softmax(/T) 후 내림차순 정렬, top_k 로 truncate 하여 같은 길이로
-    맞춘 뒤 L1. (top_k truncation 은 연산량을 위한 근사.)
+    큰 vocab(262k) 전체 softmax를 float으로 만들면 T4에서 OOM 나므로, **logit에서
+    먼저 top_k를 뽑고 그 위에서만 softmax**한다(전체 vocab softmax 대신 top_k 근사).
     """
-    q = F.softmax(student_logits.float() / temperature, dim=-1)
-    p = F.softmax(teacher_logits.float() / temperature, dim=-1)
-    k = min(top_k, q.size(-1), p.size(-1))
-    q_top = torch.topk(q, k, dim=-1).values  # 이미 내림차순
-    p_top = torch.topk(p, k, dim=-1).values
+    k = min(top_k, student_logits.size(-1), teacher_logits.size(-1))
+    q_top = F.softmax(torch.topk(student_logits, k, dim=-1).values.float() / temperature, dim=-1)
+    p_top = F.softmax(torch.topk(teacher_logits, k, dim=-1).values.float() / temperature, dim=-1)
     return (q_top - p_top).abs().sum(dim=-1).mean()
 
 
@@ -204,13 +202,17 @@ def main() -> int:
             )
             if not pairs:
                 continue
+            # 긴 예제는 정렬 위치 수를 상한 (교사 top_k 연산 메모리 상한 → OOM 방지)
+            max_pairs = lc.get("uld_max_pairs", 256)
+            if len(pairs) > max_pairs:
+                pairs = pairs[:: max(1, len(pairs) // max_pairs)][:max_pairs]
 
             s_ids = s_enc["input_ids"].to(device)
             t_ids = t_enc["input_ids"].to(device)
 
-            s_out = student(input_ids=s_ids).logits[0]              # (Ls, V_s)
+            s_out = student(input_ids=s_ids).logits[0]        # (Ls, V_s) bf16
             with torch.no_grad():
-                t_out = teacher(input_ids=t_ids).logits[0].float()  # (Lt, V_t)
+                t_out = teacher(input_ids=t_ids).logits[0]    # (Lt, V_t) bf16, float 변환 안 함
 
             # hard CE: 학생 자기 토크나이즈 기준 다음 토큰 예측 (= sequence-level KD)
             ce = F.cross_entropy(s_out[:-1], s_ids[0, 1:])
