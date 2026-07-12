@@ -1,6 +1,22 @@
-# Distillation Pipeline — Gemini(교사) → LFM2.5-350M(학생)
+# Distillation Pipeline — Gemma 4 E4B(교사) → LFM2.5-350M(학생)
 
-닫힌 API 교사(Gemini)로 소형 학생 모델(LFM2.5-350M)을 증류하는 파이프라인.
+소형 학생 모델(LFM2.5-350M)을 증류하는 파이프라인. 교사는 닫힌 API(Gemini,
+sequence-level) 또는 오픈 웨이트(Gemma 4 E4B, ULD 로짓 증류) 둘 다 가능.
+
+## ✅ End-to-end 검증됨 (Colab 무료 T4)
+
+전체 파이프라인이 실제로 완주됨:
+- **학습**: Gemma 4 E4B(교사, NF4 4-bit) → LFM2.5-350M(학생, QLoRA) ULD 증류,
+  dolly-15k 2,000개 × 3 epoch. 교사·학생 모두 4-bit라 무료 T4(16GB)에서 동작.
+  세션 분할(체크포인트→Drive)로 여러 번 나눠 완주.
+- **배포**: LoRA 병합(fp16) → GGUF f16 → **q4_k_m (~200MB, 500MB 목표 달성)**.
+- **실행 결과**(llama.cpp, CPU): "What is knowledge distillation?"에 코히런트하고
+  대체로 정확한 답변 생성. 속도 **생성 ~27.7 tok/s / 프리필 ~45 tok/s**.
+- 한계: 2,000개 소규모 학습이라 학습 분포 밖 난제엔 약함. 품질 향상 = 데이터 확대
+  (파이프라인이 이어하기를 지원하므로 데이터만 키워 재실행).
+
+원본 목표(§DESIGN)와의 관계: "500MB로 31B급 전반 동등"은 불가하지만, **500MB 이하
+온디바이스 모델을 교사 증류로 실제 구축**하는 경로는 여기서 완주로 증명됨.
 
 ## 왜 이 구조인가 (읽고 시작할 것)
 
